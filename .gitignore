@@ -1,0 +1,7 @@
+openssl-*
+nginx-*
+t/servroot
+test-nginx
+*.swp
+.gdb_history
+

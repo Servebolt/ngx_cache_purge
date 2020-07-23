@@ -1841,7 +1841,7 @@ ngx_http_cache_purge_is_partial(ngx_http_request_t *r) {
     key = c->keys.elts;
 
     /* Only check the first key */
-    return (key[0].data[key[0].len - 1] == '*' ||
+    return key[0].data && key[0].len > 0 &&(key[0].data[key[0].len - 1] == '*' ||
             key[0].data[key[0].len - 1] == '$');
 }
 
