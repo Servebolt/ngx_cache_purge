@@ -704,6 +704,27 @@ ngx_http_proxy_cache_purge_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
 }
 
 ngx_int_t
+ngx_http_proxy_cache_purge_key(ngx_http_request_t *r, ngx_http_cache_purge_loc_conf_t *cplcf, ngx_http_file_cache_t *cache, ngx_http_complex_value_t *cache_key) {
+
+    if (ngx_http_cache_purge_init(r, cache, cache_key) != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    /* Purge-all option */
+    if (cplcf->conf->purge_all) {
+        ngx_http_cache_purge_all(r, cache);
+    } else {
+        if (ngx_http_cache_purge_is_partial(r)) {
+            ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                          "http file cache purge with partial enabled");
+
+            ngx_http_cache_purge_partial(r, cache);
+        }
+   }
+   return NGX_OK;
+}
+
+ngx_int_t
 ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
     ngx_http_file_cache_t               *cache;
     ngx_http_proxy_loc_conf_t           *plcf;
@@ -740,24 +761,18 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
 #  endif /* nginx_version >= 1007009 */
 
     cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
-    /* Custom cache_key option */
-    cache_key = &plcf->cache_key;
+
+    /* Alternative cache keys */
     if (cplcf->proxy.cache_key.values) {
         cache_key = &cplcf->proxy.cache_key;
+        if (ngx_http_proxy_cache_purge_key(r, cplcf, cache, cache_key) != NGX_OK) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
     }
-    if (ngx_http_cache_purge_init(r, cache, cache_key) != NGX_OK) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    /* Purge-all option */
-    if (cplcf->conf->purge_all) {
-        ngx_http_cache_purge_all(r, cache);
-    } else {
-        if (ngx_http_cache_purge_is_partial(r)) {
-            ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                          "http file cache purge with partial enabled");
-
-            ngx_http_cache_purge_partial(r, cache);
+    else {
+        cache_key = &plcf->cache_key;
+        if (ngx_http_proxy_cache_purge_key(r, cplcf, cache, cache_key) != NGX_OK) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
     }
 
