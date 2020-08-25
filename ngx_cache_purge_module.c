@@ -68,6 +68,7 @@ typedef struct {
     ngx_flag_t                    enable;
     ngx_str_t                     method;
     ngx_flag_t                    purge_all;
+    ngx_http_complex_value_t      cache_key;
     ngx_array_t                  *access;   /* array of ngx_in_cidr_t */
     ngx_array_t                  *access6;  /* array of ngx_in6_cidr_t */
 } ngx_http_cache_purge_conf_t;
@@ -117,7 +118,7 @@ char       *ngx_http_uwsgi_cache_purge_conf(ngx_conf_t *cf,
 ngx_int_t   ngx_http_uwsgi_cache_purge_handler(ngx_http_request_t *r);
 # endif /* NGX_HTTP_UWSGI */
 
-char        *ngx_http_cache_purge_response_type_conf(ngx_conf_t *cf, 
+char        *ngx_http_cache_purge_response_type_conf(ngx_conf_t *cf,
                 ngx_command_t *cmd, void *conf);
 static ngx_int_t
 ngx_http_purge_file_cache_noop(ngx_tree_ctx_t *ctx, ngx_str_t *path);
@@ -707,6 +708,7 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
     ngx_http_file_cache_t               *cache;
     ngx_http_proxy_loc_conf_t           *plcf;
     ngx_http_cache_purge_loc_conf_t     *cplcf;
+    ngx_http_complex_value_t            *cache_key;
 #  if (nginx_version >= 1007009)
     ngx_http_proxy_main_conf_t          *pmcf;
     ngx_int_t                            rc;
@@ -737,12 +739,17 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
 
 #  endif /* nginx_version >= 1007009 */
 
-    if (ngx_http_cache_purge_init(r, cache, &plcf->cache_key) != NGX_OK) {
+    cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
+    /* Custom cache_key option */
+    cache_key = &plcf->cache_key;
+    if (cplcf->proxy.cache_key.values) {
+        cache_key = &cplcf->proxy.cache_key;
+    }
+    if (ngx_http_cache_purge_init(r, cache, cache_key) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     /* Purge-all option */
-    cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
     if (cplcf->conf->purge_all) {
         ngx_http_cache_purge_all(r, cache);
     } else {
@@ -1263,7 +1270,7 @@ ngx_http_cache_purge_response_type_conf(ngx_conf_t *cf, ngx_command_t *cmd, void
 
     value = cf->args->elts;
 
-    if (ngx_strcmp(value[1].data, "html") != 0 && ngx_strcmp(value[1].data, "json") != 0 
+    if (ngx_strcmp(value[1].data, "html") != 0 && ngx_strcmp(value[1].data, "json") != 0
         && ngx_strcmp(value[1].data, "xml") != 0 && ngx_strcmp(value[1].data, "text") != 0) {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                            "invalid parameter \"%V\", expected"
@@ -1469,7 +1476,7 @@ ngx_http_cache_purge_send_response(ngx_http_request_t *r) {
     ngx_str_t    *key;
     ngx_int_t     rc;
     size_t        len;
-    
+
     size_t body_len;
     size_t resp_tmpl_len;
     u_char *buf;
@@ -1560,7 +1567,7 @@ ngx_http_cache_purge_send_response(ngx_http_request_t *r) {
     if (b == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    
+
 
     out.buf = b;
     out.next = NULL;
@@ -1882,6 +1889,26 @@ ngx_http_cache_purge_conf(ngx_conf_t *cf, ngx_http_cache_purge_conf_t *cpcf) {
     if (ngx_strcmp(value[from_position].data, "purge_all") == 0) {
         cpcf->purge_all = 1;
         from_position++;
+    }
+
+    /* Servebolt: Purge a custom cache key */
+    if (ngx_strcmp(value[from_position].data, "cache_key") == 0) {
+        ngx_http_compile_complex_value_t ccv;
+        from_position++;
+        ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
+        ccv.cf = cf;
+        ccv.value = &value[from_position];
+        ccv.complex_value = &cpcf->cache_key;
+        ccv.zero = 0;
+        ccv.conf_prefix = 0;
+
+        if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+            return NGX_CONF_ERROR;
+        }
+        from_position++;
+    }
+    else {
+      ngx_memzero(&cpcf->cache_key, sizeof(ngx_http_complex_value_t));
     }
 
 
