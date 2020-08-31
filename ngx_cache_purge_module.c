@@ -703,6 +703,23 @@ ngx_http_proxy_cache_purge_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) 
     return NGX_CONF_OK;
 }
 
+static ngx_int_t
+ngx_http_cache_purge(ngx_http_request_t *r) {
+    ngx_http_cache_purge_loc_conf_t     *cplcf;
+    ngx_int_t  rc;
+
+    cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
+    rc = NGX_OK;
+    if (!cplcf->conf->purge_all && !ngx_http_cache_purge_is_partial(r)) {
+        rc = ngx_http_file_cache_purge(r);
+
+        ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "http file cache purge: %i, \"%s\"",
+                       rc, r->cache->file.name.data);
+    }
+    return rc;
+}
+
 ngx_int_t
 ngx_http_proxy_cache_purge_key(ngx_http_request_t *r, ngx_http_cache_purge_loc_conf_t *cplcf, ngx_http_complex_value_t *cache_key) {
     ngx_http_file_cache_t *cache;
@@ -748,9 +765,7 @@ ngx_http_proxy_cache_purge_key(ngx_http_request_t *r, ngx_http_cache_purge_loc_c
     r->main->count++;
 #  endif
 
-   ngx_http_cache_purge_handler(r);
-
-   return NGX_OK;
+   return ngx_http_cache_purge(r);
 }
 
 ngx_int_t
@@ -771,14 +786,20 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
 
     /* Alternative cache keys */
     if (cplcf->proxy.cache_keys) {
+        ngx_uint_t e = 1;
         ngx_uint_t i;
         ngx_http_complex_value_t *cache_keys = (ngx_http_complex_value_t *)cplcf->proxy.cache_keys->elts;
         for (i = 0; i != cplcf->proxy.cache_keys->nelts; ++i) {
             cache_key = cache_keys + i;
-            if (ngx_http_proxy_cache_purge_key(r, cplcf, cache_key) != NGX_OK) {
-                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            if (ngx_http_proxy_cache_purge_key(r, cplcf, cache_key) == NGX_OK) {
+                e = 0;
             }
         }
+        if (e) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+        r->write_event_handler = ngx_http_request_empty_handler;
+        ngx_http_finalize_request(r, ngx_http_cache_purge_send_response(r));
     }
     else {
         cache_key = &plcf->cache_key;
@@ -1695,7 +1716,6 @@ ngx_http_cache_purge_init(ngx_http_request_t *r, ngx_http_file_cache_t *cache,
 
 void
 ngx_http_cache_purge_handler(ngx_http_request_t *r) {
-    ngx_http_cache_purge_loc_conf_t     *cplcf;
     ngx_int_t  rc;
 
 #  if (NGX_HAVE_FILE_AIO)
@@ -1704,15 +1724,7 @@ ngx_http_cache_purge_handler(ngx_http_request_t *r) {
     }
 #  endif
 
-    cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
-    rc = NGX_OK;
-    if (!cplcf->conf->purge_all && !ngx_http_cache_purge_is_partial(r)) {
-        rc = ngx_http_file_cache_purge(r);
-
-        ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                       "http file cache purge: %i, \"%s\"",
-                       rc, r->cache->file.name.data);
-    }
+    rc = ngx_http_cache_purge(r);
 
     switch (rc) {
     case NGX_OK:
