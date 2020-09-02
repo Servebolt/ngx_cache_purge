@@ -761,10 +761,6 @@ ngx_http_proxy_cache_purge_key(ngx_http_request_t *r, ngx_http_cache_purge_loc_c
         }
    }
 
-#  if (nginx_version >= 8011)
-    r->main->count++;
-#  endif
-
    return ngx_http_cache_purge(r);
 }
 
@@ -807,6 +803,10 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
     }
+
+#  if (nginx_version >= 8011)
+    r->main->count++;
+#  endif
 
     return NGX_DONE;
 }
