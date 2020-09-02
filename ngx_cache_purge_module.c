@@ -32,6 +32,9 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#ifndef NGX_CACHE_PURGE_CUSTOM
+    #define NGX_CACHE_PURGE_CUSTOM 1
+#endif
 
 #ifndef nginx_version
     #error This module cannot be build against an unknown nginx version.
@@ -68,7 +71,9 @@ typedef struct {
     ngx_flag_t                    enable;
     ngx_str_t                     method;
     ngx_flag_t                    purge_all;
+#if NGX_CACHE_PURGE_CUSTOM
     ngx_array_t                  *cache_keys; /* array of ngx_http_complex_value_t */
+#endif
     ngx_array_t                  *access;   /* array of ngx_in_cidr_t */
     ngx_array_t                  *access6;  /* array of ngx_in6_cidr_t */
 } ngx_http_cache_purge_conf_t;
@@ -764,11 +769,39 @@ ngx_http_proxy_cache_purge_key(ngx_http_request_t *r, ngx_http_cache_purge_loc_c
    return ngx_http_cache_purge(r);
 }
 
+#if NGX_CACHE_PURGE_CUSTOM
+ngx_int_t
+ngx_http_proxy_cache_purge_custom_handler(ngx_http_request_t *r, ngx_http_cache_purge_loc_conf_t *cplcf) {
+    ngx_uint_t rc, err = NGX_HTTP_INTERNAL_SERVER_ERROR;
+    ngx_uint_t i;
+    ngx_http_complex_value_t *cache_key;
+    ngx_http_complex_value_t *cache_keys = (ngx_http_complex_value_t *)cplcf->proxy.cache_keys->elts;
+    for (i = 0; i != cplcf->proxy.cache_keys->nelts; ++i) {
+        cache_key = cache_keys + i;
+        rc = ngx_http_proxy_cache_purge_key(r, cplcf, cache_key);
+        if (rc != NGX_OK) {
+            err = rc;
+        }
+    }
+    if (err != NGX_OK) {
+        return err;
+    }
+    r->write_event_handler = ngx_http_request_empty_handler;
+    ngx_http_finalize_request(r, ngx_http_cache_purge_send_response(r));
+
+    return NGX_DONE;
+}
+#endif /* NGX_CACHE_PURGE_CUSTOM */
+
 ngx_int_t
 ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
+    ngx_http_file_cache_t               *cache;
     ngx_http_proxy_loc_conf_t           *plcf;
     ngx_http_cache_purge_loc_conf_t     *cplcf;
-    ngx_http_complex_value_t            *cache_key;
+#  if (nginx_version >= 1007009)
+    ngx_http_proxy_main_conf_t          *pmcf;
+    ngx_int_t                            rc;
+#  endif /* nginx_version >= 1007009 */
 
     if (ngx_http_upstream_create(r) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -778,35 +811,52 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
 
     r->upstream->conf = &plcf->upstream;
 
+#  if (nginx_version >= 1007009)
+
+    pmcf = ngx_http_get_module_main_conf(r, ngx_http_proxy_module);
+
+    r->upstream->caches = &pmcf->caches;
+
+    rc = ngx_http_cache_purge_cache_get(r, r->upstream, &cache);
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+#  else
+
+    cache = plcf->upstream.cache->data;
+
+#  endif /* nginx_version >= 1007009 */
+
+    if (ngx_http_cache_purge_init(r, cache, &plcf->cache_key) != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    /* Purge-all option */
     cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
 
-    /* Alternative cache keys */
+#if NGX_CACHE_PURGE_CUSTOM
     if (cplcf->proxy.cache_keys) {
-        ngx_uint_t e = 1;
-        ngx_uint_t i;
-        ngx_http_complex_value_t *cache_keys = (ngx_http_complex_value_t *)cplcf->proxy.cache_keys->elts;
-        for (i = 0; i != cplcf->proxy.cache_keys->nelts; ++i) {
-            cache_key = cache_keys + i;
-            if (ngx_http_proxy_cache_purge_key(r, cplcf, cache_key) == NGX_OK) {
-                e = 0;
-            }
-        }
-        if (e) {
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
-        }
-        r->write_event_handler = ngx_http_request_empty_handler;
-        ngx_http_finalize_request(r, ngx_http_cache_purge_send_response(r));
+        ngx_http_proxy_cache_purge_custom_handler(r, cplcf);
     }
-    else {
-        cache_key = &plcf->cache_key;
-        if (ngx_http_proxy_cache_purge_key(r, cplcf, cache_key) != NGX_OK) {
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+#endif /* NGX_CACHE_PURGE_CUSTOM */
+
+    if (cplcf->conf->purge_all) {
+        ngx_http_cache_purge_all(r, cache);
+    } else {
+        if (ngx_http_cache_purge_is_partial(r)) {
+            ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                          "http file cache purge with partial enabled");
+
+            ngx_http_cache_purge_partial(r, cache);
         }
     }
 
 #  if (nginx_version >= 8011)
     r->main->count++;
 #  endif
+
+    ngx_http_cache_purge_handler(r);
 
     return NGX_DONE;
 }
@@ -1923,6 +1973,7 @@ ngx_http_cache_purge_conf(ngx_conf_t *cf, ngx_http_cache_purge_conf_t *cpcf) {
         from_position++;
     }
 
+#if NGX_CACHE_PURGE_CUSTOM
     /* Purge one or more custom cache keys */
     if (ngx_strcmp(value[from_position].data, "cache_key") == 0) {
         from_position++;
@@ -1948,6 +1999,7 @@ ngx_http_cache_purge_conf(ngx_conf_t *cf, ngx_http_cache_purge_conf_t *cpcf) {
             from_position++;
         }
     }
+#endif
 
     /* sanity check */
     if (ngx_strcmp(value[from_position].data, "from") != 0) {
