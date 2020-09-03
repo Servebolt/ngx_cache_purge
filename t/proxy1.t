@@ -81,6 +81,7 @@ PURGE /purge/proxy/passwd
 Content-Type: text/html
 Content-Length: 154
 --- response_body_like: Successful purge
+--- response_body_like: </html>$
 --- timeout: 10
 --- no_error_log eval
 qr/\[(warn|error|crit|alert|emerg)\]/
