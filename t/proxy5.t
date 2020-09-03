@@ -5,7 +5,7 @@ use Test::Nginx::Socket;
 
 repeat_each(1);
 
-plan tests => 32;
+plan tests => repeat_each() * blocks() * 4 + 1;
 
 our $http_config = <<'_EOC_';
     proxy_cache_path  /tmp/ngx_cache_purge_cache keys_zone=test_cache:10m;
@@ -36,6 +36,19 @@ run_tests();
 no_diff();
 
 __DATA__
+
+=== TEST 0: purge empty cache
+--- http_config eval: $::http_config
+--- config eval: $::config
+--- request
+PURGE /proxy/nosuchfile
+--- error_code: 412
+--- response_headers
+Content-Type: text/html
+--- response_body_like: Precondition Failed
+--- timeout: 10
+--- no_error_log eval
+qr/\[(warn|error|crit|alert|emerg)\]/
 
 === TEST 1: prepare GET passwd
 --- http_config eval: $::http_config

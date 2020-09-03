@@ -808,12 +808,12 @@ ngx_http_proxy_cache_purge_custom_handler(ngx_http_request_t *r, ngx_http_cache_
         }
     }
 
-    r->write_event_handler = ngx_http_request_empty_handler;
-    ngx_http_cache_purge_finalize_request(r, err);
-
 #  if (nginx_version >= 8011)
     r->main->count++;
 #  endif
+
+    r->write_event_handler = ngx_http_request_empty_handler;
+    ngx_http_cache_purge_finalize_request(r, err);
 
     return NGX_DONE;
 }
