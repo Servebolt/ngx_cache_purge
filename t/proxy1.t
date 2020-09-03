@@ -5,7 +5,7 @@ use Test::Nginx::Socket;
 
 repeat_each(1);
 
-plan tests => repeat_each() * (blocks() * 4 + 3 * 1);
+plan tests => repeat_each() * (blocks() * 4 + 3 * 1 + 1);
 
 our $http_config = <<'_EOC_';
     proxy_cache_path  /tmp/ngx_cache_purge_cache keys_zone=test_cache:10m;
@@ -79,6 +79,7 @@ PURGE /purge/proxy/passwd
 --- error_code: 200
 --- response_headers
 Content-Type: text/html
+Content-Length: 154
 --- response_body_like: Successful purge
 --- timeout: 10
 --- no_error_log eval
