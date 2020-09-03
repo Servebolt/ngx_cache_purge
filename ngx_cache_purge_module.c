@@ -769,25 +769,51 @@ ngx_http_proxy_cache_purge_key(ngx_http_request_t *r, ngx_http_cache_purge_loc_c
    return ngx_http_cache_purge(r);
 }
 
+static void
+ngx_http_cache_purge_finalize_request(ngx_http_request_t *r, ngx_int_t rc) {
+    switch (rc) {
+    case NGX_OK:
+        r->write_event_handler = ngx_http_request_empty_handler;
+        ngx_http_finalize_request(r, ngx_http_cache_purge_send_response(r));
+        return;
+    case NGX_DECLINED:
+        ngx_http_finalize_request(r, NGX_HTTP_PRECONDITION_FAILED);
+        return;
+#  if (NGX_HAVE_FILE_AIO)
+    case NGX_AGAIN:
+        r->write_event_handler = ngx_http_cache_purge_handler;
+        return;
+#  endif
+    default:
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+    }
+}
+
 #if NGX_CACHE_PURGE_CUSTOM
 ngx_int_t
 ngx_http_proxy_cache_purge_custom_handler(ngx_http_request_t *r, ngx_http_cache_purge_loc_conf_t *cplcf) {
-    ngx_uint_t rc, err = NGX_HTTP_INTERNAL_SERVER_ERROR;
-    ngx_uint_t i;
+    ngx_uint_t err = NGX_HTTP_INTERNAL_SERVER_ERROR;
+    ngx_uint_t i, rc;
     ngx_http_complex_value_t *cache_key;
     ngx_http_complex_value_t *cache_keys = (ngx_http_complex_value_t *)cplcf->proxy.cache_keys->elts;
+    if (cplcf->proxy.cache_keys->nelts == 0) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
     for (i = 0; i != cplcf->proxy.cache_keys->nelts; ++i) {
         cache_key = cache_keys + i;
         rc = ngx_http_proxy_cache_purge_key(r, cplcf, cache_key);
-        if (rc != NGX_OK) {
+        if (err != NGX_OK) {
+            /* setting err to NGX_OK once is all we need for success */
             err = rc;
         }
     }
-    if (err != NGX_OK) {
-        return err;
-    }
+
     r->write_event_handler = ngx_http_request_empty_handler;
-    ngx_http_finalize_request(r, ngx_http_cache_purge_send_response(r));
+    ngx_http_cache_purge_finalize_request(r, err);
+
+#  if (nginx_version >= 8011)
+    r->main->count++;
+#  endif
 
     return NGX_DONE;
 }
@@ -828,18 +854,18 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
 
 #  endif /* nginx_version >= 1007009 */
 
-    if (ngx_http_cache_purge_init(r, cache, &plcf->cache_key) != NGX_OK) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
     /* Purge-all option */
     cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
 
 #if NGX_CACHE_PURGE_CUSTOM
     if (cplcf->proxy.cache_keys) {
-        ngx_http_proxy_cache_purge_custom_handler(r, cplcf);
+        return ngx_http_proxy_cache_purge_custom_handler(r, cplcf);
     }
 #endif /* NGX_CACHE_PURGE_CUSTOM */
+
+    if (ngx_http_cache_purge_init(r, cache, &plcf->cache_key) != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
 
     if (cplcf->conf->purge_all) {
         ngx_http_cache_purge_all(r, cache);
@@ -1776,22 +1802,7 @@ ngx_http_cache_purge_handler(ngx_http_request_t *r) {
 
     rc = ngx_http_cache_purge(r);
 
-    switch (rc) {
-    case NGX_OK:
-        r->write_event_handler = ngx_http_request_empty_handler;
-        ngx_http_finalize_request(r, ngx_http_cache_purge_send_response(r));
-        return;
-    case NGX_DECLINED:
-        ngx_http_finalize_request(r, NGX_HTTP_PRECONDITION_FAILED);
-        return;
-#  if (NGX_HAVE_FILE_AIO)
-    case NGX_AGAIN:
-        r->write_event_handler = ngx_http_cache_purge_handler;
-        return;
-#  endif
-    default:
-        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
-    }
+    ngx_http_cache_purge_finalize_request(r, rc);
 }
 
 ngx_int_t
