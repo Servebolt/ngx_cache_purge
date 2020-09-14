@@ -32,8 +32,8 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-#ifndef NGX_CACHE_PURGE_CUSTOM
-    #define NGX_CACHE_PURGE_CUSTOM 1
+#ifndef NGX_CACHE_PURGE_CACHE_KEYS
+    #define NGX_CACHE_PURGE_CACHE_KEYS 1
 #endif
 
 #ifndef nginx_version
@@ -71,7 +71,7 @@ typedef struct {
     ngx_flag_t                    enable;
     ngx_str_t                     method;
     ngx_flag_t                    purge_all;
-#if NGX_CACHE_PURGE_CUSTOM
+#if NGX_CACHE_PURGE_CACHE_KEYS
     ngx_array_t                  *cache_keys; /* array of ngx_http_complex_value_t */
 #endif
     ngx_array_t                  *access;   /* array of ngx_in_cidr_t */
@@ -123,6 +123,8 @@ char       *ngx_http_uwsgi_cache_purge_conf(ngx_conf_t *cf,
 ngx_int_t   ngx_http_uwsgi_cache_purge_handler(ngx_http_request_t *r);
 # endif /* NGX_HTTP_UWSGI */
 
+char        *ngx_http_cache_purge_keys_conf(ngx_conf_t *cf,
+                ngx_command_t *cmd, void *conf);
 char        *ngx_http_cache_purge_response_type_conf(ngx_conf_t *cf,
                 ngx_command_t *cmd, void *conf);
 static ngx_int_t
@@ -203,6 +205,15 @@ static ngx_command_t  ngx_http_cache_purge_module_commands[] = {
     },
 # endif /* NGX_HTTP_UWSGI */
 
+
+# if (NGX_CACHE_PURGE_CACHE_KEYS)
+    { ngx_string("cache_purge_keys"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
+      ngx_http_cache_purge_keys_conf,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
+      NULL },
+# endif /* NGX_CACHE_PURGE_CACHE_KEYS */
 
     { ngx_string("cache_purge_response_type"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
@@ -789,7 +800,7 @@ ngx_http_cache_purge_finalize_request(ngx_http_request_t *r, ngx_int_t rc) {
     }
 }
 
-#if NGX_CACHE_PURGE_CUSTOM
+#if NGX_CACHE_PURGE_CACHE_KEYS
 ngx_int_t
 ngx_http_proxy_cache_purge_custom_handler(ngx_http_request_t *r, ngx_http_cache_purge_loc_conf_t *cplcf) {
     ngx_uint_t err = NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -817,7 +828,7 @@ ngx_http_proxy_cache_purge_custom_handler(ngx_http_request_t *r, ngx_http_cache_
 
     return NGX_DONE;
 }
-#endif /* NGX_CACHE_PURGE_CUSTOM */
+#endif /* NGX_CACHE_PURGE_CACHE_KEYS */
 
 ngx_int_t
 ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
@@ -857,11 +868,11 @@ ngx_http_proxy_cache_purge_handler(ngx_http_request_t *r) {
     /* Purge-all option */
     cplcf = ngx_http_get_module_loc_conf(r, ngx_http_cache_purge_module);
 
-#if NGX_CACHE_PURGE_CUSTOM
+#if NGX_CACHE_PURGE_CACHE_KEYS
     if (cplcf->proxy.cache_keys) {
         return ngx_http_proxy_cache_purge_custom_handler(r, cplcf);
     }
-#endif /* NGX_CACHE_PURGE_CUSTOM */
+#endif /* NGX_CACHE_PURGE_CACHE_KEYS */
 
     if (ngx_http_cache_purge_init(r, cache, &plcf->cache_key) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -1361,7 +1372,6 @@ ngx_http_uwsgi_cache_purge_handler(ngx_http_request_t *r) {
     return NGX_DONE;
 }
 # endif /* NGX_HTTP_UWSGI */
-
 
 char *
 ngx_http_cache_purge_response_type_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
@@ -1945,6 +1955,45 @@ ngx_http_cache_purge_is_partial(ngx_http_request_t *r) {
             key[0].data[key[0].len - 1] == '$');
 }
 
+#if NGX_CACHE_PURGE_CACHE_KEYS
+char *
+ngx_http_cache_purge_keys_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_http_cache_purge_loc_conf_t   *cplcf;
+    ngx_str_t       *value;
+    ngx_uint_t       from_position;
+
+    cplcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_cache_purge_module);
+
+    value = cf->args->elts;
+
+    /* Purge one or more custom cache keys */
+    for (from_position = 1; from_position != cf->args->nelts; ++from_position) {
+        ngx_http_compile_complex_value_t ccv;
+        ngx_http_complex_value_t *cache_key;
+
+        if (cplcf->proxy.cache_keys == NULL) {
+            cplcf->proxy.cache_keys = ngx_array_create(cf->pool, 1, sizeof(ngx_http_complex_value_t));
+        }
+        cache_key = (ngx_http_complex_value_t *)ngx_array_push(cplcf->proxy.cache_keys);
+
+        ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
+        ccv.cf = cf;
+        ccv.value = &value[from_position];
+        ccv.complex_value = cache_key;
+        ccv.zero = 0;
+        ccv.conf_prefix = 0;
+
+        if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+            return NGX_CONF_ERROR;
+        }
+    }
+
+    return NGX_CONF_OK;
+}
+#endif /* NGX_CACHE_PURGE_CACHE_KEYS */
+
+
 char *
 ngx_http_cache_purge_conf(ngx_conf_t *cf, ngx_http_cache_purge_conf_t *cpcf) {
     ngx_cidr_t       cidr;
@@ -1983,34 +2032,6 @@ ngx_http_cache_purge_conf(ngx_conf_t *cf, ngx_http_cache_purge_conf_t *cpcf) {
         cpcf->purge_all = 1;
         from_position++;
     }
-
-#if NGX_CACHE_PURGE_CUSTOM
-    /* Purge one or more custom cache keys */
-    if (ngx_strcmp(value[from_position].data, "cache_key") == 0) {
-        from_position++;
-        while (ngx_strcmp(value[from_position].data, "from") != 0) {
-            ngx_http_compile_complex_value_t ccv;
-            ngx_http_complex_value_t *cache_key;
-
-            if (cpcf->cache_keys == NULL) {
-                cpcf->cache_keys = ngx_array_create(cf->pool, 1, sizeof(ngx_http_complex_value_t));
-            }
-            cache_key = (ngx_http_complex_value_t *)ngx_array_push(cpcf->cache_keys);
-
-            ngx_memzero(&ccv, sizeof(ngx_http_compile_complex_value_t));
-            ccv.cf = cf;
-            ccv.value = &value[from_position];
-            ccv.complex_value = cache_key;
-            ccv.zero = 0;
-            ccv.conf_prefix = 0;
-
-            if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
-                return NGX_CONF_ERROR;
-            }
-            from_position++;
-        }
-    }
-#endif
 
     /* sanity check */
     if (ngx_strcmp(value[from_position].data, "from") != 0) {
