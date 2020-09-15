@@ -20,7 +20,8 @@ our $config = <<'_EOC_';
         proxy_cache_valid  3m;
         add_header         X-Cache-Status $upstream_cache_status;
 
-        proxy_cache_purge PURGE cache_key "GET$scheme$host$request_uri" "HEAD$scheme$host$request_uri" from 1.0.0.0/8 127.0.0.0/8 3.0.0.0/8;
+        cache_purge_keys "GET$scheme$host$request_uri" "HEAD$scheme$host$request_uri";
+        proxy_cache_purge PURGE from 1.0.0.0/8 127.0.0.0/8 3.0.0.0/8;
     }
 
 
